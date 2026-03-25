@@ -1,22 +1,19 @@
 """
 PyCBA - Load module
 
-The load matrix represents the loads as a `List` of `Lists`.
-Each list entry represents a single load and must be in the following format:
+The load matrix is a ``List[List]`` of load descriptors.  Each entry
+describes one load; the number of columns varies by load type:
 
-     Span No. | Load Type | Load Value | Distance a | Load Cover c
-
-Load Types are:
-
-    1 - **Uniformly Distributed Loads**, which only have a load value; distances `a` and `c` are set to "0".
-
-    2 - **Point Loads**, located at `a` from the left end of the span; distances `c` is set to "0".
-
-    3 - **Partial UDLs**, starting at `a` for a distance of `c` (i.e. the cover) where $L >= a+c$.
-
-    4 - **Moment Load**, located at `a`; distances `c` is set to "0".
-
-It has dimension `M` x 5, where `M` is the number of loads applied to the beam.
+=====  ====================  ================================  ====
+Type   Name                  Format                            Cols
+=====  ====================  ================================  ====
+1      UDL                   ``[span, 1, w]``                  3
+2      Point Load            ``[span, 2, P, a]``               4
+3      Partial UDL           ``[span, 3, w, a, c]``            5
+4      Moment Load           ``[span, 4, M, a]``               4
+5      Trapezoidal (full)    ``[span, 5, w1, w2]``             4
+5      Trapezoidal (partial) ``[span, 5, w1, w2, a, c]``       6
+=====  ====================  ================================  ====
 
 The type alias `LoadMatrix` is defined as
 
@@ -28,142 +25,7 @@ from __future__ import annotations
 from typing import Union, List, NamedTuple, Tuple, Optional
 import numpy as np
 
-# Define a type alias
-LoadType = List[Union[int, float]]
-LoadMatrix = List[LoadType]
-
-
-class LoadCNL(NamedTuple):
-    """
-    A typed namedtuple for Consistent Nodal Loads
-    """
-
-    Va: float
-    Ma: float
-    Vb: float
-    Mb: float
-
-
-# Would be nice to have this in results.py but it causes a circular reference
-class MemberResults:
-    """
-    Class for storing the results for a single member
-    """
-
-    def __init__(
-        self,
-        vals: Optional[
-            Tuple[np.array, np.array, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-        ] = None,
-        n: Optional[int] = None,
-    ):
-        """
-        Construct the class with a tuple of the vectors of results along the member.
-
-        Parameters
-        ----------
-        vals : Optional[Tuple[np.array, np.array, np.ndarray, np.ndarray, np.ndarray, np.ndarray]], optional
-            The tuple containing the vectors of results along the member `(x, M, V, R, D)`. The default is None.
-        n : Optional[int], optional
-            The length of each vector in the results tuple. The default is None.
-
-        Raises
-        ------
-        ValueError
-            Either of the function parameters must be provided.
-
-        Returns
-        -------
-        None.
-        """
-
-        if vals is not None:
-            (x, M, V, R, D) = vals
-            self.n = len(x)
-            self.x = x  # location of result values along member
-            self.V = V  # Shear force
-            self.M = M  # Bending moments
-            self.R = R  # Rotations
-            self.D = D  # Deflection/translation
-        elif n is not None:
-            self.n = n
-            self._zero(n)
-        else:
-            raise ValueError("MemberResults requries either vals or n")
-
-    def _zero(self, n: int):
-        """
-        Creates a zero arrays of results
-
-        Parameters
-        ----------
-        n : int
-            The number of entries for results along the member
-
-        Returns
-        -------
-        None
-        """
-
-        self.x = np.zeros(n)
-        self.M = np.zeros(n)
-        self.V = np.zeros(n)
-        self.R = np.zeros(n)
-        self.D = np.zeros(n)
-
-    def __add__(self, o: MemberResults):
-        """
-        Overload addition of :class:`pycba.load.MemberResults` objects to superimpose
-        load effects.
-
-        Parameters
-        ----------
-        o : MemberResults
-            The other set of results for the member to be added to the current set
-
-        Raises
-        ------
-        ValueError
-            The results must be for the same member.
-
-        Returns
-        -------
-        MemberResults
-            An object containing the superimposed set of :class:`pycba.load.MemberResults`
-        """
-
-        # Test they are the same member
-        np.testing.assert_equal(
-            self.x, o.x, err_msg="Cannot superimpose results of different members"
-        )
-
-        # Do not superimpose distance
-        x = self.x
-
-        # Superimpose load effects
-        M = self.M + o.M
-        V = self.V + o.V
-        R = self.R + o.V
-        D = self.D + o.D
-
-        return MemberResults(vals=(x, M, V, R, D))
-
-    def apply_EI(self, EI: float):
-        """
-        Factors results by flexural rigidity after numerical integration of the
-        bending moments for the displacements (rotations and translations).
-
-        Parameters
-        ----------
-        EI : float
-            The flexural rigidity
-
-        Returns
-        -------
-        None
-        """
-        self.R /= EI
-        self.D /= EI
+from .types import LoadType, LoadMatrix, LoadCNL, MemberResults
 
 
 class Load:
@@ -565,6 +427,244 @@ class LoadPUDL(Load):
         return res
 
 
+class LoadTrapez(Load):
+    """
+    Trapezoidal (linearly varying) distributed load, optionally partial.
+
+    The load varies linearly from intensity *w1* at position *a* to *w2* at
+    position *a + c*.  When *a* = 0 and *c* = span length the load covers
+    the full span (the default).
+    """
+
+    def __init__(
+        self,
+        i_span: int,
+        w1: float,
+        w2: float,
+        a: float = 0.0,
+        c: Optional[float] = None,
+    ):
+        """
+        Creates a trapezoidal load for the member.
+
+        Parameters
+        ----------
+        i_span : int
+            The member index to which the load is applied.
+        w1 : float
+            The load intensity at position *a* (left edge of the load).
+        w2 : float
+            The load intensity at position *a + c* (right edge of the load).
+        a : float, optional
+            Distance from the left end of the span to the start of the load.
+            Default is 0 (load starts at the left end).
+        c : float or None, optional
+            Length (cover) of the load.  ``None`` (default) means full span
+            from *a* to the right end.
+        """
+        super().__init__(i_span)
+        self.w1 = w1
+        self.w2 = w2
+        self.a = a
+        self._c = c  # None ⇒ full span from a, resolved when L is known
+
+    def _resolve(self, L: float):
+        """Resolve c and clip to span boundaries.
+
+        Returns (w1, w2, dw, a, c) with c > 0, or c = 0 when the load
+        falls outside the span.
+        """
+        a = self.a
+        c = self._c if self._c is not None else L - a
+        w1 = self.w1
+        w2 = self.w2
+
+        if a >= L or c <= 0:
+            return w1, w2, 0.0, a, 0.0
+
+        # Clip overhang
+        if a + c > L:
+            c_orig = c
+            c = L - a
+            w2 = w1 + (w2 - w1) * c / c_orig  # interpolated at clipped end
+
+        return w1, w2, w2 - w1, a, c
+
+    def get_cnl(self, L: float, eType: int) -> LoadCNL:
+        """
+        Consistent Nodal Loads for the trapezoidal load on a fixed-fixed span.
+
+        Derived from the fixed-end force influence integrals:
+
+        .. math::
+            M_A = \\frac{1}{L^2}\\int_a^b w(x)\\,x\\,(L-x)^2\\,dx
+
+        Parameters
+        ----------
+        L : float
+            The length of the member
+        eType : int
+            The member element type
+
+        Returns
+        -------
+        LoadCNL
+            Consistent Nodal Loads for this load type
+        """
+        w1, w2, dw, a, c = self._resolve(L)
+
+        if c <= 0:
+            return LoadCNL(Va=0.0, Vb=0.0, Ma=0.0, Mb=0.0)
+
+        alpha = L - a  # distance: load start → right beam end
+        # delta = L - a - c    # distance: load end → right beam end (not used directly)
+
+        # --- Ma: ∫ w(x) · x · (L−x)² dx / L² ---
+        # Split into UDL(w1) integral I1 and triangular(dw) integral I2.
+        I1 = (
+            c**4 / 4
+            + (a - 2 * alpha) * c**3 / 3
+            + (alpha**2 - 2 * a * alpha) * c**2 / 2
+            + a * alpha**2 * c
+        )
+        I2 = (
+            c**5 / 5
+            + (a - 2 * alpha) * c**4 / 4
+            + (alpha**2 - 2 * a * alpha) * c**3 / 3
+            + a * alpha**2 * c**2 / 2
+        )
+        Ma = (w1 / L**2) * I1 + (dw / (c * L**2)) * I2
+
+        # --- Mb: −∫ w(x) · x² · (L−x) dx / L² ---
+        J1 = (
+            -(c**4) / 4
+            + (alpha - 2 * a) * c**3 / 3
+            + (2 * a * alpha - a**2) * c**2 / 2
+            + a**2 * alpha * c
+        )
+        J2 = (
+            -(c**5) / 5
+            + (alpha - 2 * a) * c**4 / 4
+            + (2 * a * alpha - a**2) * c**3 / 3
+            + a**2 * alpha * c**2 / 2
+        )
+        Mb = -((w1 / L**2) * J1 + (dw / (c * L**2)) * J2)
+
+        # --- Va: ∫ w(x) · (L−x)² · (2x+L) dx / L³ ---
+        K1 = (
+            c**4 / 2
+            + (a - alpha) * c**3
+            - 3 * a * alpha * c**2
+            + (3 * a + alpha) * alpha**2 * c
+        )
+        K2 = (
+            2 * c**5 / 5
+            + 3 * (a - alpha) * c**4 / 4
+            - 2 * a * alpha * c**3
+            + (3 * a + alpha) * alpha**2 * c**2 / 2
+        )
+        Va = (w1 / L**3) * K1 + (dw / (c * L**3)) * K2
+
+        Vb = (w1 + w2) * c / 2 - Va
+
+        return LoadCNL(Va=Va, Vb=Vb, Ma=Ma, Mb=Mb)
+
+    def get_mbr_results(self, x: np.ndarray, L: float) -> MemberResults:
+        """
+        Simply-supported member results using Macaulay bracket integration.
+
+        The load ``w(x) = w1 + (w2−w1)·(x−a)/c`` for ``a ≤ x ≤ a+c`` is
+        integrated using Macaulay brackets at positions *a* and *b = a+c*.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Vector of points along the length of the member
+        L : float
+            The length of the member
+
+        Returns
+        -------
+        res : MemberResults
+            A populated :class:`pycba.load.MemberResults` object
+        """
+        npts = len(x)
+        res = MemberResults(vals=None, n=npts)
+        res.x = x
+
+        w1, w2, dw, a, c = self._resolve(L)
+
+        if c <= 0:
+            res.V = np.zeros(npts)
+            res.M = np.zeros(npts)
+            res.R = np.zeros(npts)
+            res.D = np.zeros(npts)
+            return res
+
+        b = a + c
+        alpha = L - a
+        delta = L - b
+
+        # Simply-supported reaction at left end (moment equilibrium about B)
+        Va = (
+            (w1 / 2) * alpha**2
+            + (dw / (6 * c)) * alpha**3
+            - (w2 / 2) * delta**2
+            - (dw / (6 * c)) * delta**3
+        ) / L
+
+        # Rotation integration constant (from D(0) = D(L) = 0)
+        Ra = (
+            -(Va / 6) * L**3
+            + (w1 / 24) * alpha**4
+            + (dw / (120 * c)) * alpha**5
+            - (w2 / 24) * delta**4
+            - (dw / (120 * c)) * delta**5
+        ) / L
+
+        # Macaulay brackets at load start and end
+        MBa = self.MB(x - a)
+        MBb = self.MB(x - b)
+
+        res.V = (
+            Va
+            - w1 * MBa
+            - (dw / (2 * c)) * MBa**2
+            + w2 * MBb
+            + (dw / (2 * c)) * MBb**2
+        )
+        res.M = (
+            Va * x
+            - (w1 / 2) * MBa**2
+            - (dw / (6 * c)) * MBa**3
+            + (w2 / 2) * MBb**2
+            + (dw / (6 * c)) * MBb**3
+        )
+        res.R = (
+            (Va / 2) * x**2
+            - (w1 / 6) * MBa**3
+            - (dw / (24 * c)) * MBa**4
+            + (w2 / 6) * MBb**3
+            + (dw / (24 * c)) * MBb**4
+            + Ra
+        )
+        res.D = (
+            (Va / 6) * x**3
+            - (w1 / 24) * MBa**4
+            - (dw / (120 * c)) * MBa**5
+            + (w2 / 24) * MBb**4
+            + (dw / (120 * c)) * MBb**5
+            + Ra * x
+        )
+
+        res.V[0] = 0.0
+        res.V[npts - 1] = 0.0
+        res.M[0] = 0.0
+        res.M[npts - 1] = 0.0
+
+        return res
+
+
 class LoadMaMb(Load):
     """
     Member end moment loads
@@ -789,6 +889,13 @@ def parse_LM(LM: LoadMatrix) -> List[Load]:
             m = load[2]
             a = load[3]
             loads.append(LoadML(span, m, a))
+        # Trapezoidal Load
+        elif ltype == 5:
+            w1 = load[2]
+            w2 = load[3]
+            a = load[4] if len(load) > 4 else 0.0
+            c = load[5] if len(load) > 5 else None
+            loads.append(LoadTrapez(span, w1, w2, a, c))
     return loads
 
 
@@ -845,6 +952,11 @@ def factor_LM(LM: LoadMatrix, gamma: float) -> LoadMatrix:
             LMnew.append([i_span, l_type, mag])
         elif l_type == 2 or l_type == 4:  # PL or ML
             LMnew.append([i_span, l_type, mag, load[3]])
+        elif l_type == 5:  # Trapezoidal
+            new_load = [i_span, l_type, mag, gamma * load[3]]
+            if len(load) > 4:
+                new_load.extend(load[4:])  # a, c are not factored
+            LMnew.append(new_load)
         else:  # PUDL
             LMnew.append([i_span, l_type, mag, load[3], load[4]])
 

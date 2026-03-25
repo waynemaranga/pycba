@@ -18,6 +18,7 @@ class Beam:
         R: Optional[np.ndarray] = None,
         LM: Optional[LoadMatrix] = None,
         eletype: Optional[np.ndarray] = None,
+        D: Optional[np.ndarray] = None,
     ):
         """
         Constructs a beam object
@@ -35,6 +36,9 @@ class Beam:
             parameters.
         eletype : Optional[np.ndarray]
             A vector of the member types. Defaults to a fixed-fixed element.
+        D : Optional[np.ndarray]
+            A vector of prescribed displacements. Must have same length as R.
+            Use None for DOFs without prescribed displacement.
 
 
         Returns
@@ -48,6 +52,7 @@ class Beam:
         self.mbr_EIs = []
         self.mbr_eletype = []
         self._restraints = []
+        self._prescribed_displacements = []
         self._loads = []
         self.LM = []
         self._terminal_coords = [0.0]
@@ -67,6 +72,14 @@ class Beam:
                 self._restraints = R
             else:
                 raise ValueError("Insufficient restraints defined")
+            if D is not None:
+                if len(D) != len(R):
+                    raise ValueError(
+                        f"D must have same length as R ({len(R)}), got {len(D)}"
+                    )
+                self._prescribed_displacements = D
+            else:
+                self._prescribed_displacements = [None] * len(R)
         if LM is not None:
             self.LM = LM
 
@@ -190,6 +203,40 @@ class Beam:
         self._restraints = r
         pass
 
+    @property
+    def prescribed_displacements(self) -> list:
+        """
+        Returns the prescribed displacements vector for the beam
+
+        Returns
+        -------
+        _prescribed_displacements : list
+            The prescribed displacements vector for the beam
+
+        """
+        return self._prescribed_displacements
+
+    @prescribed_displacements.setter
+    def prescribed_displacements(self, d):
+        """
+        Stores prescribed displacements
+
+        Parameters
+        -------
+        d : list
+            The prescribed displacement vector for the beam
+
+        Returns
+        -------
+        None
+
+        """
+        if len(d) != len(self._restraints):
+            raise ValueError(
+                f"D must have same length as R ({len(self._restraints)}), got {len(d)}"
+            )
+        self._prescribed_displacements = d
+
     def _set_element_type(self, i_span):
         """
         Stores element type for a span based on support conditions
@@ -262,16 +309,6 @@ class Beam:
         """
         if pos < 0.0 or pos > self.length:
             return -1, 0
-        """
-        # more basic algorithim
-        ispan = 0
-        pos_in_span = pos
-        while ispan < self.no_spans and pos_in_span > self.mbr_lengths[ispan]:
-            pos_in_span -= self.mbr_lengths[ispan]
-            ispan += 1
-            if ispan > self.no_spans:
-                ispan = -1
-        """
         try:
             ispan = next(i - 1 for i, x in enumerate(self._terminal_coords) if x > pos)
         except StopIteration:  # at the end of the beam

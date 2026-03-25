@@ -22,10 +22,11 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-        - "3.8"
         - "3.9"
         - "3.10"
         - "3.11"
+        - "3.12"
+        - "3.13"
           
     name: Check Python ${{ matrix.python-version }}
     steps:
@@ -47,4 +48,4 @@ jobs:
         pip install coverage
         coverage run -m pytest
     - name: Upload Coverage to Codecov
-      uses: codecov/codecov-action@v4.2.0
+      uses: codecov/codecov-action@v4.5.0

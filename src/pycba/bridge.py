@@ -209,7 +209,12 @@ class BridgeAnalysis:
         return self.ba.analyze()
 
     def run_vehicle(
-        self, step: float, plot_env: bool = False, plot_all: bool = False
+        self,
+        step: float,
+        plot_env: bool = False,
+        plot_all: bool = False,
+        pos_start: Optional[float] = None,
+        pos_end: Optional[float] = None,
     ) -> Envelopes:
         """
         Runs the vehicle over the bridge performing a static analysis at each point
@@ -223,6 +228,12 @@ class BridgeAnalysis:
         plot_all : bool, optional
             Whether or not to plot the results for each position as an animation.
             The default is False.
+        pos_start : Optional[float], optional
+            The starting position of the front axle. Defaults to 0 (front axle at
+            the left end of the beam).
+        pos_end : Optional[float], optional
+            The ending position of the front axle. Defaults to beam length plus
+            vehicle length (front axle past the right end of the beam).
 
         Raises
         ------
@@ -239,14 +250,20 @@ class BridgeAnalysis:
         self._check_objects()
         self.pos = []
         self.vResults = []
-        npts = round((self.ba.beam.length + self.veh.L) / step) + 1
+
+        if pos_start is None:
+            pos_start = 0.0
+        if pos_end is None:
+            pos_end = self.ba.beam.length + self.veh.L
+
+        npts = round((pos_end - pos_start) / step) + 1
 
         if plot_all:
             fig, axs = plt.subplots(2, 1, sharex=True)
 
         for i in range(npts):
             # load position
-            pos = i * step
+            pos = pos_start + i * step
             self.pos.append(pos)
             out = self._single_analysis(pos)
             if out != 0:
@@ -269,7 +286,11 @@ class BridgeAnalysis:
     ) -> Dict[str, Dict[str, Union[float, np.ndarray]]]:
         """
         From the envelopes output, returns the extreme values, their locations,
-        and the position of the vehicle for each in a dictionary of dictionaries
+        and the position of the vehicle for each in a dictionary of dictionaries.
+
+        Each moment entry (``Mmax``, ``Mmin``) also contains a ``"Vco"`` key with
+        the coincident shear at the critical location. Each shear entry (``Vmax``,
+        ``Vmin``) contains a ``"Mco"`` key with the coincident moment.
 
         Parameters
         ----------
@@ -287,7 +308,8 @@ class BridgeAnalysis:
         -------
         crit_values : Dict[str, Dict[str, Union[float, np.ndarray]]]
             A dictionary of dictionaries containing the critical values (i.e. extremes)
-            of each of the load effects, both maximum and minimum.
+            of each of the load effects, both maximum and minimum, along with
+            coincident values of the other effect.
         """
 
         crit_values = {}
@@ -329,21 +351,25 @@ class BridgeAnalysis:
             "val": Mmax,
             "at": env.x[env.Mmax.argmax()],
             "pos": [self.pos[i] for i in indx["Mmax"]],
+            "Vco": env.Vco_Mmax[env.Mmax.argmax()],
         }
         crit_values["Mmin"] = {
             "val": Mmin,
             "at": env.x[env.Mmin.argmin()],
             "pos": [self.pos[i] for i in indx["Mmin"]],
+            "Vco": env.Vco_Mmin[env.Mmin.argmin()],
         }
         crit_values["Vmax"] = {
             "val": Vmax,
             "at": env.x[env.Vmax.argmax()],
             "pos": [self.pos[i] for i in indx["Vmax"]],
+            "Mco": env.Mco_Vmax[env.Vmax.argmax()],
         }
         crit_values["Vmin"] = {
             "val": Vmin,
             "at": env.x[env.Vmin.argmin()],
             "pos": [self.pos[i] for i in indx["Vmin"]],
+            "Mco": env.Mco_Vmin[env.Vmin.argmin()],
         }
         crit_values["nsup"] = env.nsup
         for i in range(env.nsup):
